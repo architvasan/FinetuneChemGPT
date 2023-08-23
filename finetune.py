@@ -1,8 +1,10 @@
+
+import selfies as sf
 from transformers import TrainingArguments, Trainer
 import numpy as np
 import evaluate
 import pandas as pd
-from datasets import load_dataset 
+from datasets import load_dataset, Dataset 
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
@@ -12,6 +14,9 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sklearn.model_selection import train_test_split
 from transformers import TrainingArguments
+
+def tokenize_function(smi):
+    return tokenizer(smi, padding="max_length", truncation=True)
 
 def preprocess(input_data, tokenizer):
     max_seq_len = 45
@@ -28,31 +33,42 @@ def preprocess(input_data, tokenizer):
     dataset = torch.utils.data.TensorDataset(
         tokenized_dataset["input_ids"], tokenized_dataset["attention_mask"]
     )
-    #dataloader = DataLoader(dataset, batch_size=batch_size)
-    return dataset
+    dataloader = DataLoader(dataset, batch_size=32)
+    return dataloader#tokenized_dataset#dataset
 
 
 tokenizer = AutoTokenizer.from_pretrained("ncfrey/ChemGPT-1.2B")
 model = AutoModelForCausalLM.from_pretrained("ncfrey/ChemGPT-1.2B")
 
-smiles_origin_path_train = 'origin_train_placeholder'
-smiles_origin_path_vali = 'origin_vali_placeholder'
-smiles_new_path = 'new_placeholder'
+smiles_origin_path_train = 'data/train-00000-of-00001-e9b227f8c7259c8b.parquet'
+smiles_origin_path_vali = 'data/validation-00000-of-00001-9368b7243ba1bff8.parquet'
+smiles_new_path = 'data/Top_hits.csv'
 
-smiles_original_train = pd.read_parquet(smiles_origin_path_train)['smiles'].sample(frac=0.01, random_state=1)
-smiles_original_vali = pd.read_parquet(smiles_origin_path_vali)['smiles'].sample(frac=0.01, random_state=2)
-smiles_new = pd.read_csv(smiles_new_path)['smiles']
+smiles_original_train = pd.read_parquet(smiles_origin_path_train, usecols='smiles').sample(frac=0.01, random_state=1)
+smiles_original_vali = pd.read_parquet(smiles_origin_path_vali, usecols='smiles').sample(frac=0.01, random_state=2)
+#smiles_original_vali = pd.read_parquet(smiles_origin_path_vali)['smiles'].sample(frac=0.01, random_state=2)
+smiles_new = pd.read_csv(smiles_new_path, usecols= 'smiles')#['smiles']
 smiles_new_train, smiles_new_vali = train_test_split(smiles_new, test_size=0.1)
 
 smiles_data_train = pd.concat([smiles_original_train, smiles_new_train]).sample(frac = 1)
+print(smiles_data_train)
 smiles_data_vali = pd.concat([smiles_original_vali, smiles_new_vali]).sample(frac = 1)
 
-Dataset_train = preprocess(smiles_data_train)
-Dataset_vali = preprocess(smiles_data_vali)
+dataset_train = Dataset.from_pandas(smiles_data_train)
+dataset_vali = Dataset.from_pandas(smiles_data_vali)
+dataset_train_tok = dataset_train.map(tokenize_function, batched=True)
+dataset_vali_tok = dataset_vali.map(tokenize_function, batched = True)
 
+#smiles_data_train_seqs = list(smiles_data_train.to_numpy())
+#smiles_data_vali_seqs = list(smiles_data_vali.to_numpy())
+
+#selfies_train =smiles_data_train#.apply(lambda x: sf.encoder(x))# [sf.encoder(smi) for smi in smiles_data_train_seqs]
+#selfies_vali = smiles_data_vali#.apply(lambda x: sf.encoder(x))#[sf.encoder(smi) for smi in smiles_data_vali_seqs]
+#
+#Dataset_train = preprocess(selfies_train, tokenizer)
+#Dataset_vali = preprocess(selfies_vali, tokenizer)
 
 training_args = TrainingArguments(output_dir="test_trainer")
-
 
 metric = evaluate.load("accuracy")
 
@@ -66,8 +82,8 @@ training_args = TrainingArguments(output_dir="test_trainer", evaluation_strategy
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=Dataset_train,
-    eval_dataset=Dataset_vali,
+    train_dataset=dataset_train_tok,
+    eval_dataset=dataset_vali_tok,
     compute_metrics=compute_metrics,
 )
 
